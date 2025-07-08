@@ -39,22 +39,22 @@ Kalman filter 卡尔曼滤波器
 	xi	i = k, k+1, ..., k+n	样本
 	∑xi						样本值之和
 	∑(xi - E)					样本值减期望之和，非一阶中心矩
-	∑(xi - E)² 				非方差
+	∑(xi - E)² 					非方差
 	∑(xpj - Ep)(xqj - Eq)
 	E(x)						期望
 	D(x)						方差
-	Cov(xp,xq)				协方差
+	Cov(xp,xq)					协方差
 
 第k+1次的各种变量为
 
 	xj'	j = k+1,k+2, ..., k+n	样本
 	∑'xj						样本值之和
 	∑'(xj - E')					样本值减期望之和，非一阶中心矩
-	∑'(xj - E')² 				非方差
-	∑'(xpj - E')(xqj - E')			非协方差
+	∑'(xj - E')² 					非方差
+	∑'(xpj - E')(xqj - E')				非协方差
 	E'(x)						期望
-	D'(x)					方差
-	Cov(xp, xq)				协方差
+	D'(x)						方差
+	Cov(xp, xq)					协方差
 
 X = xk, xk_1,  ..., xk_n_1
 
@@ -103,9 +103,9 @@ X = xk, xk_1,  ..., xk_n_1
 		= (xpj - Ep) *  (xqj - Eq) + Δeq* (xpj - Ep)  + Δep*(xqj - Eq)] +  Δep*Δeq
 	
 	∑'(xpj - E')(xqj - E') = 	∑'(xpj - Ep) *  (xqj - Eq) + 					第一部分
-						Δeq*∑' (xpj - Ep)  +  						第二部分
-						Δep*∑' (xqj - Eq) + 						第三部分
-						n*Δep*Δeq 看成4部分					
+						Δeq*∑' (xpj - Ep)  +  					第二部分
+						Δep*∑' (xqj - Eq) + 					第三部分
+						n*Δep*Δeq 						看成4部分					
 	
 	第一部分 = (xk2p - E)*(xk2q -E) + (xk3p - E)*(xk3q -E) + ... + (xkn_1p - E)*(xkn_1q -E) + (xknp - E)*(xknq -E)
 			= cov(xp,xq) - (xk1p - E)*(xk1q - E) + (xknp - E)*(xknq -E)		取得一加一减形式
