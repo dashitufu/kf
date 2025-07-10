@@ -59,8 +59,8 @@ void SB_imu_gnss()
 	bLat_Long_2_utm_ang(GNSS<double>{}, 0., 0., 0., (double*)NULL, (UTM_Param<double>*)NULL, (utm<double>*)NULL);
 	bLat_Long_2_utm_ang(GNSS<float>{}, 0.f, 0.f, 0.f, (float*)NULL, (UTM_Param<float>*)NULL, (utm<float>*)NULL);
 
-	Update_pvq(IMU<double>{}, (double*)NULL, (double*)NULL, (double*)NULL, (double*)NULL, (double*)NULL, (double*)NULL, 0.);
-	Update_pvq(IMU<float>{}, (float*)NULL, (float*)NULL, (float*)NULL, (float*)NULL, (float*)NULL, (float*)NULL,(float)0.f);
+	Predict_pvq(IMU<double>{}, (double*)NULL, (double*)NULL, (double*)NULL, (double*)NULL, (double*)NULL, (double*)NULL, 0.);
+	Predict_pvq(IMU<float>{}, (float*)NULL, (float*)NULL, (float*)NULL, (float*)NULL, (float*)NULL, (float*)NULL,(float)0.f);
 
 	return;
 }
@@ -1711,10 +1711,10 @@ template<typename _T>int bLat_Long_2_utm_ang(GNSS<_T> oGnss, _T fAntenna_x, _T f
 	return bLat_Long_2_utm_rad(oGnss_1, fAntenna_x, fAntenna_y, fAntenna_Angle, Map_Origin, poParam, poUtm);
 }
 
-template<typename _T>void Update_pvq(IMU<_T> oImu,_T p[3], _T v[3], _T R[3 * 3],_T ba[3], _T bg[3],_T g[3],_T dt)
+template<typename _T>void Predict_pvq(IMU<_T> oImu,_T p[3], _T v[3], _T R[3 * 3],_T ba[3], _T bg[3],_T g[3],_T dt)
 {//这个不知能否做成统一函数，目前只是最简形式。一旦上无人机得上满血版
 //状态量改变了p,v,q		未改变的是bg, ba ,g
- //a1 = [R * (a + ba) + g] * dt
+ //		a1 = [R * (a + ba) + g] * dt
  //p1 = p0 + (v0 + 0.5 * a1 * dt) * dt
  //v1 = v0 + a1 * dt
  //a1 = [R * (a + ba) + g] * dt
@@ -1725,7 +1725,7 @@ template<typename _T>void Update_pvq(IMU<_T> oImu,_T p[3], _T v[3], _T R[3 * 3],
 	_T Temp[3];
 
 	//先算 a1 = R * (a - ba) + g
-	Vector_Minus(oImu.a, ba, 3, a1);				//a1 - ba
+	Vector_Minus(oImu.a, ba, 3, a1);		//a1 - ba
 	Matrix_Multiply(R, 3, 3, a1, 1, a1);	//R * (a - ba)
 	Vector_Add(a1, g, 3, a1);				//a1 = R * (a - ba) + g
 
@@ -1733,15 +1733,15 @@ template<typename _T>void Update_pvq(IMU<_T> oImu,_T p[3], _T v[3], _T R[3 * 3],
 	Vector_Multiply(a1, 3, dt, a1_dt);
 
 	//第一部分，更新p, 计算	p1 = p0 + (v0 + 0.5 * a1 * dt) * dt
-	//其中，				a1 = R * (a - ba) + g
+	//其中，					a1 = R * (a - ba) + g
 	Vector_Multiply(a1_dt, 3,(_T)0.5, Temp);	//0.5 * a1 * dt
-	Vector_Add(v, Temp, 3, Temp);			//v0 + 0.5 * a1 * dt
-	Vector_Multiply(Temp, 3, dt, Temp);		//(v0 + 0.5 * a1 * dt) * dt
-	Vector_Add(p, Temp, 3, p);				//p0 + (v0 + 0.5 * a1 * dt) * dt
+	Vector_Add(v, Temp, 3, Temp);				//v0 + 0.5 * a1 * dt
+	Vector_Multiply(Temp, 3, dt, Temp);			//(v0 + 0.5 * a1 * dt) * dt
+	Vector_Add(p, Temp, 3, p);					//p0 + (v0 + 0.5 * a1 * dt) * dt
 
 	//第二部分，更新v,	v1 = p0 + (v0 + 1/2*a1*dt) * dt
 	// 其中				a1 = [R * (a + ba) + g] * dt
-	Vector_Add(v, a1_dt, 3, v);			//v1 = v0 + a1*dt
+	Vector_Add(v, a1_dt, 3, v);				//v1 = v0 + a1*dt
 
 	//第三部分，更新q, R1 = R0 * Exp[ (w + bg) * dt ]
 	Vector_Minus(oImu.w, bg, 3, Temp);		// w + bg

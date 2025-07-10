@@ -24,7 +24,6 @@
     <ClCompile Include="Slam_Test_1\Image.cpp" />
     <ClCompile Include="Slam_Test_1\imu_gnss.cpp" />
     <ClCompile Include="Slam_Test_1\Matrix.cpp" />
-    <ClCompile Include="Test\Cov_Test.cpp" />
     <ClCompile Include="Test\Imu_Test.cpp" />
   </ItemGroup>
   <ItemGroup>

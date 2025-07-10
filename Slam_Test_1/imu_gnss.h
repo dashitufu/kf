@@ -101,5 +101,5 @@ template<typename _T>void Rotate_z(_T Source[3], _T psi, _T Dest[3]);
 template<typename _T>int bRead_IMU(const char* pcFile, IMU<_T>** ppIMU, int* piCount);
 
 //给定一个imu读数，更新pvq(R)值
-template<typename _T>void Update_pvq(IMU<_T> oImu, _T p[3], _T v[3], _T R[3 * 3], _T ba[3], _T bg[3], _T g[3], _T dt);
+template<typename _T>void Predict_pvq(IMU<_T> oImu, _T p[3], _T v[3], _T R[3 * 3], _T ba[3], _T bg[3], _T g[3], _T dt);
 

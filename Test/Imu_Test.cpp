@@ -243,19 +243,27 @@ template<typename _T>struct ESKF_Param {
 template<typename _T>struct ESKF {		//搞个卡尔曼滤波环境
 	ESKF_Param<_T> m_oParam;
 	_T Origin[3];	//整个过程的原点的世界坐标
-	_T R[3 * 3], Rotation_Vector[4], p[3],
+	_T R[3 * 3], dR[3 * 3],
+		Rotation_Vector[4], 
+		p[3],
 		v[3]={},
 		m_fCur_Time;
+	utm<_T> oUtm;				//Gnss读书转成utm位置
 
 	_T ba[3], bg[3], g[3];
 
 	_T Var_a, Var_w;
 
-	_T dx[18] = {};		//排列顺序：p,v,q(旋转向量),bg,ba,g
+	_T xk[18] = {};		//排列顺序：p,v,q(旋转向量),bg,ba,g
 
 	_T P[18 * 18];		//这个很有可能就是P矩阵
 	
-	_T Q_[18 * 18];			//一个大矩阵，描述噪声？暂时不明
+	_T Q_[18 * 18];			//状态噪声
+	_T R_[6 * 6];			//观测噪声
+
+	_T H[6 * 18],Ht[18*6];	//构造H矩阵, 为6*18矩阵
+		
+	_T	zk[18] = {};
 };
 
 static void Imu_Test_1()
@@ -292,7 +300,7 @@ static void Imu_Test_1()
 				fPre_Time = oImu.m_fTime;
 				continue;
 			}
-			Update_pvq(oImu, p, v, R, ba, bg, g,oImu.m_fTime-fPre_Time);
+			Predict_pvq(oImu, p, v, R, ba, bg, g,oImu.m_fTime-fPre_Time);
 			fPre_Time = oImu.m_fTime;
 			printf("i:%d Time:%lf %.7ef %.7ef %.7ef\n", i,oImu.m_fTime, p[0], p[1], p[2]);
 			i++;
@@ -471,6 +479,11 @@ template<typename _T>void Build_Noise(ESKF<_T> *poEskf)
 	}
 	//Disp(poEskf->Q_, 18, 18, "Q_");
 
+	_T* R_ = poEskf->R_;
+	memset(R_, 0, sizeof(poEskf->R_));
+	R_[0 * 6 + 0] = R_[1 * 6 + 1] = R_[2 * 6 + 2] = poParam->gnss_pos_noise_;	
+	R_[3 * 6 + 3] = R_[4 * 6 + 4] = R_[5 * 6 + 5] = poParam->gnss_ang_noise_;
+
 	//后面的用不上
 	//memset(poParam->odom_noise_, 0,sizeof(poParam->odom_noise_));
 	//poParam->odom_noise_[0] = poParam->odom_noise_[4] =
@@ -619,6 +632,16 @@ template<typename _T>int bInit_GNSS(FILE* pFile, ESKF<_T>* poEskf)
 	memset(poEskf->p, 0, sizeof(poEskf->p));
 	poEskf->m_fCur_Time = oGnss.m_fTime;
 
+	//构造H矩阵, 为6*18矩阵
+	_T* H = poEskf->H;
+	memset(H, 0, sizeof(poEskf->H));
+	for (int i = 0; i < 3; i++)
+	{
+		H[i * 18 + i] = 1;
+		H[(i+3) * 18 + i + 6] = 1;
+	}
+	Matrix_Transpose(H, 6, 18, poEskf->Ht);
+
 	return 1;
 }
 template<typename _T>void Disp_Eskf(ESKF<_T> oEskf)
@@ -630,13 +653,173 @@ template<typename _T>void Disp_Eskf(ESKF<_T> oEskf)
 	Disp(oEskf.bg, 1, 3, "bg");
 	Disp(oEskf.g, 1, 3, "g");
 }
+template<typename _T>void Get_F(ESKF<_T> *poEskf,_T F[18*18],_T dt,IMU<_T>*poImu)
+{//根据eskf的状态生成一个状态转移矩阵F
+	Gen_I_Matrix(F, 18, 18);		//直接生成一个单位矩阵
+	int i;
+	
+	{//先解决几个最简单的
+		for (i = 0; i < 3; i++)
+		{
+			//f03-f52 = dt
+			F[i * 18 + 3 + i] = dt;
+
+			//f153 - ff175 = dt
+			F[(i+3) * 18 + 15 + i] = dt;
+
+			//f96- f119 = -dt
+			F[(i + 6) * 18 + 9 + i] = -dt;
+		}
+	}
+	
+	{	//	-R*dt
+		_T Temp[3 * 3];
+		Matrix_Multiply(poEskf->R, 3, 3, -dt, Temp);
+		Copy_Matrix_Partial(Temp, 3, 3, F, 18, 12, 3);
+		//Disp(Temp, 3, 3, "-R*dt");
+
+		//-R*(a-ba)*dt
+		_T Temp_1[3*3];
+		Vector_Minus(poImu->a, poEskf->ba, 3, Temp_1);
+		Hat(Temp_1, Temp_1);
+		Matrix_Multiply(Temp, 3, 3, Temp_1, 3, Temp_1);
+		Copy_Matrix_Partial(Temp_1, 3, 3, F,18, 6, 3);
+		//Disp(Temp_1, 3, 3, "-R*(a-ba)*dt");
+	}
+
+	{	//Exp(-(w - bg) * dt
+		_T Temp[3 * 3];
+		Vector_Minus(poImu->w, poEskf->bg, 3, Temp);
+		Vector_Multiply(Temp, 3, -dt, Temp);
+		Rotation_Vector_3_2_Matrix(Temp, Temp);
+		Copy_Matrix_Partial(Temp, 3, 3, F, 18, 6, 6);
+		//Disp(Temp, 3, 3, "Exp(-(w - bg) * dt");
+	}
+	//Disp_Fillness(F, 18, 18);	
+}
+template<typename _T>void Update_Kf_Step_1(ESKF<_T>* poEskf, _T F[])
+{//此处尽量做到与经典KF等价
+	//1,在ESKF中，估计的不再是xk, 而是delta_xk = (xk_True - xk_Norminal)
+	//即真值减去名义状态，整个过程针对的就是这个差值
+
+	//2，xk = delta_xk,故此
+	//xk_Pred = F * xk	复合经典的Kf 预测，不仅如此，在真实的滤波中，状态与观测
+	//是不同步不对成的，此处在观测值未到之前可以反复执行，得到最新的预测值
+	Matrix_Multiply(F, 18, 18, poEskf->xk, 1, poEskf->xk);
+
+	//Pk- = F*P*F' + Q
+	_T Temp[18 * 18];
+	Matrix_Multiply(F, 18, 18, poEskf->P, 18, Temp);		//F*P
+	Matrix_Transpose(F, 18, 18, F);							//F'
+	Matrix_Multiply(Temp, 18, 18, F, 18, Temp);				//F*P*F'
+	Matrix_Add(Temp, poEskf->Q_, 18, poEskf->P);			//F*P*F' + Q
+	
+	return;
+}
+
 template<typename _T>void Predict(ESKF<_T>* poEskf, IMU<_T>oImu)
-{//ESKF的预测阶段
+{//一个KF必然有两组数据，一组给运动状态，这力就是运动状态
 	_T dt = oImu.m_fTime - poEskf->m_fCur_Time;
-	Update_pvq(oImu, poEskf->p, poEskf->v, poEskf->R, poEskf->ba, poEskf->bg, poEskf->g, dt);
+	Predict_pvq(oImu, poEskf->p, poEskf->v, poEskf->R, poEskf->ba, poEskf->bg, poEskf->g, dt);
 	//Disp_Eskf(*poEskf);
+	_T F[18 * 18];
+	Get_F(poEskf, F, dt,&oImu);
 
+	Update_Kf_Step_1(poEskf, F);
 
+	poEskf->m_fCur_Time = oImu.m_fTime;
+	return;
+}
+template<typename _T>void Update_Kf_Step_2(ESKF<_T>* poEskf)
+{//此处尽量做到与经典KF等价
+ 
+	int iResult;
+	_T Cov_Ht[18 * 6],K[18*6];
+	{//算K = P*H'*(HPH'+R_)^-1
+		_T Temp[18 * 18];
+
+		Matrix_Multiply(poEskf->P, 18, 18, poEskf->Ht, 6, Cov_Ht);	//P*H''
+		Matrix_Multiply(poEskf->H, 6, 18, Cov_Ht, 6, Temp);			//H*P*H'
+		Matrix_Add(Temp, poEskf->R_, 6, Temp);						//HPH+R_ 还是一个对称矩阵
+		Get_Inv_AAt_Row_Op(Temp, Temp, 6, &iResult);				//(HPH'+R_)^-1
+		Matrix_Multiply(Cov_Ht, 18, 6, Temp, 6, K);					//k=P*H'*(HPH'+V)^-1
+	}
+
+	{//然后计算最优值xk~	= xk + K * (zk - H * xk)
+		//注意，此处虽然符合经典KF计算的最优化一步，但是这里的xk实际上是误差。
+		_T innov[7] = { poEskf->oUtm.m_Pose[3] - poEskf->p[0],
+			poEskf->oUtm.m_Pose[7] - poEskf->p[1],
+			poEskf->oUtm.m_Pose[11] - poEskf->p[2] };
+
+		//观测值的确定
+		//	1，取GNSS位姿中的平移量作为平移量
+		//	2，取至今的最优量旋转为Rx，反方向为Rx'
+		//	3，取至今的观测量为Rz
+		//	4，视Rx' * Rz为旋转差，有道理
+		//	Rz反向旋转Rz角度，可以视为Rz - Rx，至于精确不精确可以待考
+
+		_T R_Inv[3 * 3], Temp[3*3];
+		Matrix_Transpose(poEskf->R, 3, 3, R_Inv);			//Rx' = Rx(-1)
+		Get_R_t(poEskf->oUtm.m_Pose, Temp);					//Rz
+		Matrix_Multiply(R_Inv, 3, 3, Temp, 3, Temp);		//dR = Rz - Rx = Rx'*Rz
+		Rotation_Matrix_2_Vector_3(Temp, &innov[3]);
+
+		//dx = K * dx
+		Matrix_Multiply(K, 18, 6, innov, 1, poEskf->xk);
+		//Disp(poEskf->xk, 1, 18, "xk");
+	}
+		
+	{//后验更新 Pk = (I - K*H) * Pk-
+		_T Temp[18 * 18];
+		Matrix_Multiply(K, 18, 6, poEskf->H, 18, Temp);			//kh
+		Add_I_Matrix(Temp, 18, (_T)-1);
+		Matrix_Multiply(Temp, 18, 18, (_T)-1, Temp);	//I - KH
+		Matrix_Multiply(Temp, 18, 18, poEskf->P, 18, poEskf->P);
+		//Disp(poEskf->P, 18, 18, "Pk=I - KH");
+	}
+
+	return;
+}
+template<typename _T>void Get_xk_True(ESKF<_T> *poEskf)
+{//将KF的xk作为误差状态加名义状态得真值
+	{
+		_T dR[3 * 3];
+		Rotation_Vector_3_2_Matrix(&poEskf->xk[6], dR);
+		Matrix_Multiply_3x3(poEskf->R, dR, poEskf->R);
+	}
+	
+	//Update p,v,bg,ba,g
+	Vector_Add(poEskf->p, poEskf->xk, 3, poEskf->p);
+	Vector_Add(poEskf->v, &poEskf->xk[3], 3, poEskf->v);
+	Vector_Add(poEskf->bg, &poEskf->xk[9], 3, poEskf->bg);
+	Vector_Add(poEskf->ba, &poEskf->xk[12], 3, poEskf->ba);
+	Vector_Add(poEskf->g, &poEskf->xk[15], 3, poEskf->g);
+
+	//最后一步，比较费解，尚未推导
+	{//对P阵进行投影，参考式(3.63)
+		//J = I - 1/2*q^	事实上，J近似I，故此干不干两可
+		_T Temp[3*3];
+		Vector_Multiply(&poEskf->xk[6], 3, -0.5, Temp);		//1/2 * q
+		Hat(Temp,Temp);										//1/2 * q^
+		Add_I_Matrix(Temp, 3, (_T)1);						//I - 1/2 * q^
+		//Disp(Temp, 3, 3, "I - 1/2*q^");
+
+		//Pk = J*Pk*J'	此处可以尝试用分块矩阵进行优化
+		_T J[18 * 18];
+		Gen_I_Matrix(J, 18, 18);
+		Copy_Matrix_Partial(Temp, 3, 3, J, 18, 6, 6);			
+		Matrix_Multiply(J, 18, 18, poEskf->P, 18, poEskf->P);	//J*P
+		Matrix_Transpose(J, 18, 18, J);
+		Matrix_Multiply(poEskf->P, 18, 18, J, 18, poEskf->P);	//J*P*J'
+	}
+	memset(poEskf->xk, 0, sizeof(poEskf->xk));
+	return;
+}
+template<typename _T>void Observe_SE3(ESKF<_T>* poEskf, ESKF_Param<_T>* poParam, _T fPos_Noise, _T fAng_Noise)
+{//观测过程
+	Update_Kf_Step_2(poEskf);
+
+	Get_xk_True(poEskf);
 	return;
 }
 void Eskf_Test_1()
@@ -646,11 +829,14 @@ void Eskf_Test_1()
 	if (!pFile)	{printf("Fail to open file\n");	return;	}
 
 	char Line[256];			//装一行数据
-	int i, iCount = 100;	//共装多少数据
+	int i, iCount = 10000;	//共装多少数据
 
 	//首先对imu进行初始化
 	ESKF<_T> oEskf;
 	ESKF_Param<_T> oParam;
+	UTM_Param<_T> oUTM_Param;
+	GNSS<_T> oGnss;
+	_T map_origin[3] = {};
 
 	if (!bInit_Imu(pFile, &oEskf))
 		return;
@@ -658,8 +844,7 @@ void Eskf_Test_1()
 	if (!bInit_GNSS(pFile, &oEskf))
 		return;
 
-	//Disp(oEskf.R, 3, 3, "R");
-	for (i = 1;i<iCount && iRead_Line(pFile, Line, 256); i++)
+	for (i = 1;/*i<iCount &&*/ iRead_Line(pFile, Line, 256); i++)
 	{
 		if (strstr(Line, "IMU "))
 		{
@@ -667,6 +852,26 @@ void Eskf_Test_1()
 			sscanf(Line, "IMU %lf %lf %lf %lf %lf %lf %lf ", &oImu.m_fTime,
 				&oImu.a[0], &oImu.a[1], &oImu.a[2], &oImu.w[0], &oImu.w[1], &oImu.w[2]);
 			Predict(&oEskf, oImu);
+		}else if (strstr(Line, "GNSS "))
+		{
+			sscanf(Line, "GNSS %lf %lf %lf %lf %lf %d", &oGnss.m_fTime,
+				&oGnss.GPS[0], &oGnss.GPS[1], &oGnss.GPS[2],
+				&oGnss.m_fHeading, &oGnss.m_bHeading_Valid);
+			oGnss.m_bHeading_Valid = 1;
+
+			//转换坐标，维经高->utm
+			if (!bLat_Long_2_utm_ang(oGnss, oParam.antenna_pos[0], oParam.antenna_pos[1],
+				oParam.antenna_angle, map_origin, &oUTM_Param, &oEskf.oUtm))
+				break;
+
+			oEskf.oUtm.m_Pose[3] -= oEskf.Origin[0], oEskf.oUtm.m_Pose[7] -= oEskf.Origin[1], oEskf.oUtm.m_Pose[11] -= oEskf.Origin[2];
+			Observe_SE3(&oEskf,&oParam, oParam.gnss_pos_noise_, oParam.gnss_ang_noise_);
+			oEskf.m_fCur_Time = oGnss.m_fTime;
+			//if(i>=300000)
+			//Disp(oEskf.p, 1, 3, "p");
+		}else if (strstr(Line, "ODOM "))
+		{
+			//没啥好干得
 		}
 	}
 
@@ -819,7 +1024,7 @@ void Kf_Test_2()
 		xk_Optim[2];	//最优值
 
 	_T zk[2];	//观测值
-	_T p0 = 0, v0 = 5, a = 0.00;
+	_T p0 = 0, v0 = 5, a = 0.6;
 	_T P[4] = { 0.1,0,		//先验误差协方差矩阵
 		0,	0.1 };
 	_T F[4] = { 1,	1,		//状态转移矩阵
@@ -831,12 +1036,10 @@ void Kf_Test_2()
 	_T R[4] = {};			//zk观测噪声协方差，各维之间互相独立，协方差为0
 
 	_T K[4];				//权值矩阵，决定预测值与观测值的比例
-	//_T xk_Optim_All[iWin_Size + iSample_Count][2];
-	//_T zk_All[iWin_Size + iSample_Count][2];
 	_T(*xk_Optim_All)[2] = (_T(*)[2])pMalloc((iSample_Count + iWin_Size) * 2 * sizeof(_T));
 	_T(*zk_All)[2] = (_T(*)[2])pMalloc((iSample_Count + iWin_Size) * 2 * sizeof(_T));
-
 	int i;
+
 	//*************第一步，为滑动窗口做数据*********************
 	xk[0] = 0, xk[1] = v0;
 	_T fVar_xk = sqrt(10), fVar_zk = sqrt(10000);
@@ -941,7 +1144,7 @@ void Kf_Test_2()
 	}
 
 	//**********************第二部，卡尔曼滤波**********************
-	bSave_Image("c:\\tmp\\1.bmp", oImage);
+	//bSave_Image("c:\\tmp\\1.bmp", oImage);
 	//Disp(Q, 2, 2, "Q");
 	//Disp(R, 2, 2, "R");
 
@@ -953,14 +1156,14 @@ void Kf_Test_2()
 
 template<typename _T>struct KF {	//将状态，Q，F滑动窗口，观察全搞里头
 	
-	_T p0 = 0, v0 = 5, a = 0.00,
+	_T p0 = 0, v0 = 5, a = 0.6,
 		fVar_xk = sqrt(10), fVar_zk = sqrt(10000);
 	int iWin_Size = 20;			//滑动窗口大小，用于计算Q,R
 
-	_T	xk[2],
-		xk_Pred[2],			//预测值
-		xk_Optim[2],		//最优值
-		zk[2];
+	_T	xk[2] = {},
+		xk_Pred[2] = {},			//预测值
+		xk_Optim[2] = {},		//最优值
+		zk[2] = {};
 
 	_T P[4] = { 0.1,0,		//先验误差协方差矩阵
 		0,	0.1 };
@@ -969,9 +1172,10 @@ template<typename _T>struct KF {	//将状态，Q，F滑动窗口，观察全搞里头
 	_T B[4] = { 0.5, 1 };
 	_T H[4] = { 1,	0,		//显然，这个是废的，没有起到挑选分量的作用
 		0,	1 };
-	_T Q[4] = {};			//xk过程噪声协方差，各维之间互相独立，协方差为0
-	_T R[4] = {};			//zk观测噪声协方差，各维之间互相独立，协方差为0
-
+	_T Q[4] = {10,	0,		//过程噪声协方差，各维之间互相独立，协方差为0
+				0,	10};	//xk过程噪声协方差，各维之间互相独立，协方差为0
+	_T R[4] = { 10000,	0,	//观测噪声协方差，各维之间互相独立，协方差为0
+				0,	10000};	//zk观测噪声协方差，各维之间互相独立，协方差为0
 	_T K[4];				//权值矩阵，决定预测值与观测值的比例
 };
 
@@ -1186,18 +1390,20 @@ template<typename _T>void Update_Q_R(KF<_T>* poKf, KF_Win<_T> *poWin)
 void Kf_Test_3()
 {
 	typedef double _T;
-	const int iSample_Count = 1000000;		//一共仿真多少组样本
-	_T xk[2], 
-		zk[2];						//xk真实值，x包括两项，位置+速度
+	const int iSample_Count = 100;		//一共仿真多少组样本
 	KF<_T> oKf;
+
+	//来张图
+	Image oImage;
+	Init_Image(&oImage, 1920, 1080, Image::IMAGE_TYPE_BMP,24);
 
 	//初始化滑动窗口
 	KF_Win<_T> oWin_Queue;
 	Init_Kf_Win(&oWin_Queue, &oKf);
-	//Disp(oKf.Q, 2, 2, "Q");
-	//Disp(oKf.R, 2, 2, "R");
-
 	memcpy(oKf.xk_Optim, oWin_Queue.Q.m_pBuffer[oWin_Queue.m_iBuffer_Size-1], 2 * sizeof(_T));
+	//Disp(oKf.Q, 2, 2, "Q");
+	//Disp(oKf.R, 2, 2, "R");	
+
 	for (int i = 0; i < iSample_Count; i++)
 	{
 		/*****************************造数据*********************/
@@ -1206,21 +1412,30 @@ void Kf_Test_3()
 		Matrix_Multiply(oKf.F, 2, 2, oKf.xk, 1, oKf.xk);	//F*xk_1
 		Vector_Multiply(oKf.B, 2, oKf.a, Temp);				//B*uk
 		Vector_Add(oKf.xk, Temp, 2, oKf.xk);				//F*xk_1 + B*uk
-				
 		//造zk数据
 		oKf.zk[0] = oKf.xk[0] + fGet_Random_No((_T)0, oKf.fVar_zk);
 		oKf.zk[1] = oKf.xk[1] + fGet_Random_No((_T)0, oKf.fVar_zk);
 		/*****************************造数据*********************/
 		
 		Update_Kf(&oKf);
-		//Disp(oKf.xk_Optim, 1, 2, "xk_Optim");
-		//Disp(oKf.K, 2, 2, "K");
-		//Disp((_T*)oWin_Queue.Q.m_pBuffer, oWin_Queue.m_iBuffer_Size, 2, "xk");
-		//Disp(oKf.Q, 2, 2, "Q");
+		Disp(oKf.xk_Optim, 1, 2, "xk_Optim");
 		Update_Q_R(&oKf, &oWin_Queue);
-	}
-	Disp(oKf.xk_Optim,1,2,"xk_Optim");
 
+		//画图 红，真实值，绿：最优值，蓝：观察值
+		////画位置偏移
+		//Draw_Point(oImage, (int)oKf.xk[0],i*10,2,255,0,0);
+		//Draw_Point(oImage, (int)oKf.xk_Optim[0],i*10, 2, 0, 255, 0);
+		//Draw_Point(oImage, (int)oKf.zk[0],i*10, 2, 0, 0, 255);
+
+		////画速度偏移
+		//Draw_Point(oImage, xk[1]+960,i*10,2,255,0,0);
+		//Draw_Point(oImage, xk_Optim[1]+960,i*10, 2, 0, 255, 0);
+		//Draw_Point(oImage, zk[1]+960,i*10, 2, 0, 0, 255);
+	}
+	//Disp(oKf.xk_Optim,1,2,"xk_Optim");
+	//Disp(oKf.Q, 2, 2, "Q");
+	//Disp(oKf.R, 2, 2, "R");
+	//bSave_Image("c:\\tmp\\1.bmp",oImage);
 	Free_Queue(&oWin_Queue);
 }
 
@@ -1232,10 +1447,10 @@ int main()
 	//Gnss_Test_2();		//修正一下，用相对位置
 	
 	Kf_Test_1();			//经典卡尔曼滤波器，写死Q,R
-	//Kf_Test_2();			//沿路更新Q,R，引入滑动窗口
-	//Kf_Test_3();			//优化Q,R滑动窗口的性能，改用自搓滑动窗口一加一减法
+	Kf_Test_2();			//沿路更新Q,R，引入滑动窗口
+	Kf_Test_3();			//优化Q,R滑动窗口的性能，改用自搓滑动窗口一加一减法
 
-	//Eskf_Test_1();			//ESKF推算航迹
+	Eskf_Test_1();			//ESKF推算航迹
 	Free_Env();
 #ifdef WIN32
 	_CrtDumpMemoryLeaks();
