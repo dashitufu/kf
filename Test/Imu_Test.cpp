@@ -746,7 +746,8 @@ template<typename _T>void Update_Kf_Step_2(ESKF<_T>* poEskf)
 	}
 
 	{//然后计算最优值xk~	= xk + K * (zk - H * xk)
-		//注意，此处虽然符合经典KF计算的最优化一步，但是这里的xk实际上是误差。
+		//注意，此处虽然符合经典KF计算的最优化一步，但是这里的xk实际上是误差
+		//整个ESKF在此处取得Δxk的形式，记住，此处 Δxk = zk - xk	观测值减去状态值
 		_T innov[7] = { poEskf->oUtm.m_Pose[3] - poEskf->p[0],
 			poEskf->oUtm.m_Pose[7] - poEskf->p[1],
 			poEskf->oUtm.m_Pose[11] - poEskf->p[2] };
@@ -764,16 +765,19 @@ template<typename _T>void Update_Kf_Step_2(ESKF<_T>* poEskf)
 		Matrix_Multiply(R_Inv, 3, 3, Temp, 3, Temp);		//dR = Rz - Rx = Rx'*Rz
 		Rotation_Matrix_2_Vector_3(Temp, &innov[3]);
 
-		//dx = K * dx
+		//Δxk = K * dx
+		//此处，Δxk取得了最优值，
+		// 相当于xk~	= xk + K * (zk - H * xk-) 
+		// 中的Δxk=  K * (zk - H * xk-)
 		Matrix_Multiply(K, 18, 6, innov, 1, poEskf->xk);
 		//Disp(poEskf->xk, 1, 18, "xk");
 	}
-		
+
 	{//后验更新 Pk = (I - K*H) * Pk-
 		_T Temp[18 * 18];
 		Matrix_Multiply(K, 18, 6, poEskf->H, 18, Temp);			//kh
 		Add_I_Matrix(Temp, 18, (_T)-1);
-		Matrix_Multiply(Temp, 18, 18, (_T)-1, Temp);	//I - KH
+		Matrix_Multiply(Temp, 18, 18, (_T)-1, Temp);			//I - KH
 		Matrix_Multiply(Temp, 18, 18, poEskf->P, 18, poEskf->P);
 		//Disp(poEskf->P, 18, 18, "Pk=I - KH");
 	}
@@ -829,7 +833,7 @@ void Eskf_Test_1()
 	if (!pFile)	{printf("Fail to open file\n");	return;	}
 
 	char Line[256];			//装一行数据
-	int i, iCount = 10000;	//共装多少数据
+	int i, iCount = 300000;	//共装多少数据
 
 	//首先对imu进行初始化
 	ESKF<_T> oEskf;
@@ -867,8 +871,8 @@ void Eskf_Test_1()
 			oEskf.oUtm.m_Pose[3] -= oEskf.Origin[0], oEskf.oUtm.m_Pose[7] -= oEskf.Origin[1], oEskf.oUtm.m_Pose[11] -= oEskf.Origin[2];
 			Observe_SE3(&oEskf,&oParam, oParam.gnss_pos_noise_, oParam.gnss_ang_noise_);
 			oEskf.m_fCur_Time = oGnss.m_fTime;
-			//if(i>=300000)
-			//Disp(oEskf.p, 1, 3, "p");
+			/*if(i>=390000)
+				Disp(oEskf.p, 1, 3, "p");*/
 		}else if (strstr(Line, "ODOM "))
 		{
 			//没啥好干得
@@ -1442,15 +1446,17 @@ void Kf_Test_3()
 int main()
 {
 	Init_Env();
-	//Imu_Test_1();			//只用imu数据进行轨迹推导，画出轨迹
-	//Gnss_Test_1();		//仅用gnss数据，画出轨迹
-	//Gnss_Test_2();		//修正一下，用相对位置
+
+	Imu_Test_1();			//只用imu数据进行轨迹推导，画出轨迹
+	Gnss_Test_1();			//仅用gnss数据，画出轨迹
+	Gnss_Test_2();			//修正一下，用相对位置
 	
 	Kf_Test_1();			//经典卡尔曼滤波器，写死Q,R
 	Kf_Test_2();			//沿路更新Q,R，引入滑动窗口
 	Kf_Test_3();			//优化Q,R滑动窗口的性能，改用自搓滑动窗口一加一减法
 
 	Eskf_Test_1();			//ESKF推算航迹
+
 	Free_Env();
 #ifdef WIN32
 	_CrtDumpMemoryLeaks();
