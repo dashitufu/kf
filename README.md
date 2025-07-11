@@ -121,10 +121,10 @@ X = xk, xk_1,  ..., xk_n_1
 	(xpj - Ep')* (xqj - Eq') = [(xpj - Ep) +  Δep] * [(xqj - Eq) +  Δeq]
 		= (xpj - Ep) *  (xqj - Eq) + Δeq* (xpj - Ep)  + Δep*(xqj - Eq)] +  Δep*Δeq
 	
-	∑'(xpj - E')(xqj - E') = 	∑'(xpj - Ep) *  (xqj - Eq) + 					第一部分
-						Δeq*∑' (xpj - Ep)  +  					第二部分
-						Δep*∑' (xqj - Eq) + 					第三部分
-						n*Δep*Δeq 						看成4部分
+	∑'(xpj - E')(xqj - E') = 	∑'(xpj - Ep) *  (xqj - Eq) + 				第一部分
+						Δeq*∑' (xpj - Ep)  +  				第二部分
+						Δep*∑' (xqj - Eq) + 				第三部分
+						n*Δep*Δeq 					看成4部分
 	
 	第一部分 
  	(xk2p - E)*(xk2q -E) + (xk3p - E)*(xk3q -E) + ... + (xkn_1p - E)*(xkn_1q -E) + (xknp - E)*(xknq -E)
