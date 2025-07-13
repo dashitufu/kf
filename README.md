@@ -37,6 +37,8 @@ Kalman filter 卡尔曼滤波器
   	但是这部分的旋转如何定义期望与方差得想想，如何用广义加减漂亮地进行推导，存疑
 
   	数据与高翔自动驾驶第三章数据完全一致
+
+   	优化比较容易，从稀松性着手预计有十倍的提速，难度不大不做优化
    
 5，Imu_Test_1();			
 
@@ -101,13 +103,13 @@ X = xk, xk_1,  ..., xk_n_1
    展开第一部分
    
 	∑'(xj - E)² = (xk_2 - E)² + (xk_3 - E)² + ... + (xk_n_1 - E)² + (xk_n - E)²
-			= ∑(xi- E)²  - (xk - E)² + (xk_n - E)²		取得一加一减形式
+			= ∑(xi- E)²  - (xk - E)² + (xk_n - E)²			取得一加一减形式
 
    展开第二部分
    
 	∑'(xj - E) = (xk_2 - E) + (xk_3 - E) + ... + (xk_n - E)
 			=   ∑(xk - E) - (xk-E) + (xk_n -E)
-			=   (xk_n -E)  - (xk-E) 					取得一加一减形式
+			=   (xk_n -E)  - (xk-E) 				取得一加一减形式
 
   故此，全部合在一起
   
@@ -121,10 +123,10 @@ X = xk, xk_1,  ..., xk_n_1
 	(xpj - Ep')* (xqj - Eq') = [(xpj - Ep) +  Δep] * [(xqj - Eq) +  Δeq]
 		= (xpj - Ep) *  (xqj - Eq) + Δeq* (xpj - Ep)  + Δep*(xqj - Eq)] +  Δep*Δeq
 	
-	∑'(xpj - E')(xqj - E') = 	∑'(xpj - Ep) *  (xqj - Eq) + 				第一部分
-						Δeq*∑' (xpj - Ep)  +  				第二部分
-						Δep*∑' (xqj - Eq) + 				第三部分
-						n*Δep*Δeq 					看成4部分
+	∑'(xpj - E')(xqj - E') = 	∑'(xpj - Ep) *  (xqj - Eq) + 			第一部分
+						Δeq*∑' (xpj - Ep)  +  			第二部分
+						Δep*∑' (xqj - Eq) + 			第三部分
+						n*Δep*Δeq 				看成4部分
 	
 	第一部分 
  	(xk2p - E)*(xk2q -E) + (xk3p - E)*(xk3q -E) + ... + (xkn_1p - E)*(xkn_1q -E) + (xknp - E)*(xknq -E)
